@@ -132,19 +132,51 @@ const STICK_TO_BOTTOM_OFFSET_PX = 70;
 const SIXTY_FPS_INTERVAL_MS = 1000 / 60;
 const RETAIN_ANIMATION_DURATION_MS = 350;
 
-let mouseDown = false;
+/**
+ * Tolerance for floating-point scroll comparisons.
+ * Some browsers can return non-integer scrollTop values.
+ */
+const SCROLL_TOLERANCE_PX = 1;
 
+let pointerDown = false;
+
+// Mouse events
 globalThis.document?.addEventListener("mousedown", () => {
-	mouseDown = true;
+	pointerDown = true;
 });
 
 globalThis.document?.addEventListener("mouseup", () => {
-	mouseDown = false;
+	pointerDown = false;
 });
 
 globalThis.document?.addEventListener("click", () => {
-	mouseDown = false;
+	pointerDown = false;
 });
+
+// Touch events (for all touch-capable devices)
+globalThis.document?.addEventListener(
+	"touchstart",
+	() => {
+		pointerDown = true;
+	},
+	{ passive: true },
+);
+
+globalThis.document?.addEventListener(
+	"touchend",
+	() => {
+		pointerDown = false;
+	},
+	{ passive: true },
+);
+
+globalThis.document?.addEventListener(
+	"touchcancel",
+	() => {
+		pointerDown = false;
+	},
+	{ passive: true },
+);
 
 export const useStickToBottom = (
 	options: StickToBottomOptions = {},
@@ -157,7 +189,7 @@ export const useStickToBottom = (
 	optionsRef.current = options;
 
 	const isSelecting = useCallback(() => {
-		if (!mouseDown) {
+		if (!pointerDown) {
 			return false;
 		}
 
@@ -195,10 +227,10 @@ export const useStickToBottom = (
 			resizeDifference: 0,
 			accumulated: 0,
 			velocity: 0,
-			listeners: new Set(),
-
 			get scrollTop() {
-				return scrollRef.current?.scrollTop ?? 0;
+				const raw = scrollRef.current?.scrollTop ?? 0;
+				// Clamp to valid range - handles bounce/rubber-band scrolling
+				return Math.max(0, raw);
 			},
 			set scrollTop(scrollTop: number) {
 				if (scrollRef.current) {
@@ -252,7 +284,8 @@ export const useStickToBottom = (
 			},
 
 			get scrollDifference() {
-				return this.calculatedTargetScrollTop - this.scrollTop;
+				// Ensure non-negative difference, handles bounce scrolling edge cases
+				return Math.max(0, this.calculatedTargetScrollTop - this.scrollTop);
 			},
 
 			get isNearBottom() {
@@ -430,7 +463,8 @@ export const useStickToBottom = (
 				/**
 				 * When theres a resize difference ignore the resize event.
 				 */
-				if (state.resizeDifference || scrollTop === ignoreScrollToTop) {
+				const scrollDelta = Math.abs(scrollTop - (ignoreScrollToTop ?? 0));
+				if (state.resizeDifference || (ignoreScrollToTop !== undefined && scrollDelta <= SCROLL_TOLERANCE_PX)) {
 					return;
 				}
 
@@ -440,8 +474,10 @@ export const useStickToBottom = (
 					return;
 				}
 
-				const isScrollingDown = scrollTop > lastScrollTop;
-				const isScrollingUp = scrollTop < lastScrollTop;
+				// Use tolerance for scroll direction detection to handle floating-point values
+				const scrollChange = scrollTop - lastScrollTop;
+				const isScrollingDown = scrollChange > SCROLL_TOLERANCE_PX;
+				const isScrollingUp = scrollChange < -SCROLL_TOLERANCE_PX;
 
 				if (state.animation?.ignoreEscapes) {
 					state.scrollTop = lastScrollTop;
@@ -495,11 +531,69 @@ export const useStickToBottom = (
 		[setEscapedFromLock, setIsAtBottom, state],
 	);
 
+	/**
+	 * Handle touch events for momentum scrolling detection.
+	 * Touch devices use momentum scrolling which continues after touchend,
+	 * so we need to detect touch-initiated scroll direction.
+	 */
+	const touchStartY = useRef<number | null>(null);
+
+	const handleTouchStart = useCallback(
+		(e: TouchEvent) => {
+			if (e.touches.length === 1) {
+				touchStartY.current = e.touches[0].clientY;
+			}
+		},
+		[],
+	);
+
+	const handleTouchMove = useCallback(
+		(e: TouchEvent) => {
+			if (
+				!scrollRef.current ||
+				touchStartY.current === null ||
+				e.touches.length !== 1
+			) {
+				return;
+			}
+
+			const currentY = e.touches[0].clientY;
+			const deltaY = touchStartY.current - currentY;
+
+			// User is scrolling up (finger moving down)
+			if (
+				deltaY < -10 &&
+				scrollRef.current.scrollHeight > scrollRef.current.clientHeight &&
+				!state.animation?.ignoreEscapes
+			) {
+				setEscapedFromLock(true);
+				setIsAtBottom(false);
+			}
+
+			// Update start position for continuous tracking
+			touchStartY.current = currentY;
+		},
+		[setEscapedFromLock, setIsAtBottom, state],
+	);
+
+	const handleTouchEnd = useCallback(() => {
+		touchStartY.current = null;
+	}, []);
+
 	const scrollRef = useRefCallback((scroll) => {
 		scrollRef.current?.removeEventListener("scroll", handleScroll);
 		scrollRef.current?.removeEventListener("wheel", handleWheel);
+		scrollRef.current?.removeEventListener("touchstart", handleTouchStart);
+		scrollRef.current?.removeEventListener("touchmove", handleTouchMove);
+		scrollRef.current?.removeEventListener("touchend", handleTouchEnd);
+
 		scroll?.addEventListener("scroll", handleScroll, { passive: true });
 		scroll?.addEventListener("wheel", handleWheel, { passive: true });
+
+		// Touch event handling for momentum scroll detection
+		scroll?.addEventListener("touchstart", handleTouchStart, { passive: true });
+		scroll?.addEventListener("touchmove", handleTouchMove, { passive: true });
+		scroll?.addEventListener("touchend", handleTouchEnd, { passive: true });
 	}, []);
 
 	const contentRef = useRefCallback((content) => {

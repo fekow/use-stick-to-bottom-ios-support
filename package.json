@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "vite",
     "build": "rm -rf dist > /dev/null 2>&1; tsc -b",
+    "prepare": "pnpm build",
     "prepublishOnly": "pnpm build",
     "lint": "biome check",
     "lint:fix": "pnpm lint --write"
