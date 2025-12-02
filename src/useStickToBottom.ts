@@ -684,12 +684,14 @@ export const useStickToBottom = (
 		}
 
 		let previousHeight: number | undefined;
+		let previousWidth: number | undefined;
 
 		state.resizeObserver = new ResizeObserver(([entry]) => {
-			const { height } = entry.contentRect;
-			const difference = height - (previousHeight ?? height);
+			const { height, width } = entry.contentRect;
+			const heightDifference = height - (previousHeight ?? height);
+			const widthChanged = previousWidth !== undefined && Math.abs(width - previousWidth) > 0;
 
-			state.resizeDifference = difference;
+			state.resizeDifference = heightDifference;
 
 			/**
 			 * Sometimes the browser can overscroll past the target,
@@ -701,7 +703,24 @@ export const useStickToBottom = (
 
 			setIsNearBottom(state.isNearBottom);
 
-			if (difference >= 0) {
+			/**
+			 * Width changes can cause content reflow which shifts scroll position.
+			 * If we're supposed to be at bottom and width changed, scroll to bottom.
+			 */
+			if (widthChanged && state.isAtBottom) {
+				const animation = mergeAnimations(
+					optionsRef.current,
+					optionsRef.current.resize,
+				);
+
+				handlersRef.current.scrollToBottom({
+					animation,
+					wait: true,
+					preserveScrollPosition: false,
+					duration:
+						animation === "instant" ? undefined : RETAIN_ANIMATION_DURATION_MS,
+				});
+			} else if (heightDifference >= 0) {
 				/**
 				 * If it's a positive resize, scroll to the bottom when
 				 * we're already at the bottom.
@@ -713,7 +732,7 @@ export const useStickToBottom = (
 						: optionsRef.current.initial,
 				);
 
-				scrollToBottom({
+				handlersRef.current.scrollToBottom({
 					animation,
 					wait: true,
 					preserveScrollPosition: true,
@@ -733,6 +752,7 @@ export const useStickToBottom = (
 			}
 
 			previousHeight = height;
+			previousWidth = width;
 
 			/**
 			 * Reset the resize difference after the scroll event
@@ -743,7 +763,7 @@ export const useStickToBottom = (
 			 */
 			requestAnimationFrame(() => {
 				setTimeout(() => {
-					if (state.resizeDifference === difference) {
+					if (state.resizeDifference === heightDifference) {
 						state.resizeDifference = 0;
 					}
 				}, 1);
