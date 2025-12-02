@@ -445,8 +445,11 @@ export const useStickToBottom = (
 				return;
 			}
 
-			const { scrollTop, ignoreScrollToTop } = state;
+			const { scrollTop, ignoreScrollToTop, targetScrollTop } = state;
 			let { lastScrollTop = scrollTop } = state;
+
+			// Track if we were overscrolled (past the bottom due to rubber-banding)
+			const wasOverscrolled = lastScrollTop > targetScrollTop + SCROLL_TOLERANCE_PX;
 
 			state.lastScrollTop = scrollTop;
 			state.ignoreScrollToTop = undefined;
@@ -494,7 +497,15 @@ export const useStickToBottom = (
 					return;
 				}
 
-				if (isScrollingUp) {
+				/**
+				 * Ignore scroll-up events that are just Safari/iOS bounce-back.
+				 * This happens when:
+				 * 1. We were overscrolled past the bottom (rubber-band effect)
+				 * 2. The scroll is now returning to or near the bottom
+				 */
+				const isBounceBack = wasOverscrolled && state.isNearBottom;
+
+				if (isScrollingUp && !isBounceBack) {
 					setEscapedFromLock(true);
 					setIsAtBottom(false);
 				}
