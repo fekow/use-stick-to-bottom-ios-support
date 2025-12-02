@@ -188,6 +188,8 @@ export const useStickToBottom = (
 	const optionsRef = useRef<StickToBottomOptions>(null!);
 	optionsRef.current = options;
 
+	const scrollElementRef = useRef<HTMLElement | null>(null);
+
 	const isSelecting = useCallback(() => {
 		if (!pointerDown) {
 			return false;
@@ -198,10 +200,11 @@ export const useStickToBottom = (
 			return false;
 		}
 
+		const scrollEl = scrollElementRef.current;
 		const range = selection.getRangeAt(0);
 		return (
-			range.commonAncestorContainer.contains(scrollRef.current) ||
-			scrollRef.current?.contains(range.commonAncestorContainer)
+			range.commonAncestorContainer.contains(scrollEl) ||
+			scrollEl?.contains(range.commonAncestorContainer)
 		);
 	}, []);
 
@@ -215,6 +218,8 @@ export const useStickToBottom = (
 		updateEscapedFromLock(escapedFromLock);
 	}, []);
 
+	const contentElementRef = useRef<HTMLElement | null>(null);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: not needed
 	const state = useMemo<StickToBottomState>(() => {
 		let lastCalculation:
@@ -227,47 +232,52 @@ export const useStickToBottom = (
 			resizeDifference: 0,
 			accumulated: 0,
 			velocity: 0,
-			get scrollTop() {
-				const raw = scrollRef.current?.scrollTop ?? 0;
+			get scrollTop(): number {
+				const raw = scrollElementRef.current?.scrollTop ?? 0;
 				// Clamp to valid range - handles bounce/rubber-band scrolling
 				return Math.max(0, raw);
 			},
 			set scrollTop(scrollTop: number) {
-				if (scrollRef.current) {
-					scrollRef.current.scrollTop = scrollTop;
-					state.ignoreScrollToTop = scrollRef.current.scrollTop;
+				const scrollEl = scrollElementRef.current;
+				if (scrollEl) {
+					scrollEl.scrollTop = scrollTop;
+					this.ignoreScrollToTop = scrollEl.scrollTop;
 				}
 			},
 
-			get targetScrollTop() {
-				if (!scrollRef.current || !contentRef.current) {
+			get targetScrollTop(): number {
+				const scrollEl = scrollElementRef.current;
+				const contentEl = contentElementRef.current;
+				if (!scrollEl || !contentEl) {
 					return 0;
 				}
 
 				return (
-					scrollRef.current.scrollHeight - 1 - scrollRef.current.clientHeight
+					scrollEl.scrollHeight - 1 - scrollEl.clientHeight
 				);
 			},
-			get calculatedTargetScrollTop() {
-				if (!scrollRef.current || !contentRef.current) {
+			get calculatedTargetScrollTop(): number {
+				const scrollEl = scrollElementRef.current;
+				const contentEl = contentElementRef.current;
+				if (!scrollEl || !contentEl) {
 					return 0;
 				}
 
-				const { targetScrollTop } = this;
+				const targetScrollTop = this.targetScrollTop;
 
 				if (!options.targetScrollTop) {
 					return targetScrollTop;
 				}
 
-				if (lastCalculation?.targetScrollTop === targetScrollTop) {
+				if (lastCalculation && lastCalculation.targetScrollTop === targetScrollTop) {
 					return lastCalculation.calculatedScrollTop;
 				}
 
 				const calculatedScrollTop = Math.max(
 					Math.min(
 						options.targetScrollTop(targetScrollTop, {
-							scrollElement: scrollRef.current,
-							contentElement: contentRef.current,
+							scrollElement: scrollEl,
+							contentElement: contentEl,
 						}),
 						targetScrollTop,
 					),
@@ -283,12 +293,12 @@ export const useStickToBottom = (
 				return calculatedScrollTop;
 			},
 
-			get scrollDifference() {
+			get scrollDifference(): number {
 				// Ensure non-negative difference, handles bounce scrolling edge cases
 				return Math.max(0, this.calculatedTargetScrollTop - this.scrollTop);
 			},
 
-			get isNearBottom() {
+			get isNearBottom(): boolean {
 				return this.scrollDifference <= STICK_TO_BOTTOM_OFFSET_PX;
 			},
 		};
@@ -431,7 +441,7 @@ export const useStickToBottom = (
 
 	const handleScroll = useCallback(
 		({ target }: Event) => {
-			if (target !== scrollRef.current) {
+			if (target !== scrollElementRef.current) {
 				return;
 			}
 
@@ -513,15 +523,17 @@ export const useStickToBottom = (
 				element = element.parentElement;
 			}
 
+			const scrollEl = scrollElementRef.current;
 			/**
 			 * The browser may cancel the scrolling from the mouse wheel
 			 * if we update it from the animation in meantime.
 			 * To prevent this, always escape when the wheel is scrolled up.
 			 */
 			if (
-				element === scrollRef.current &&
+				scrollEl &&
+				element === scrollEl &&
 				deltaY < 0 &&
-				scrollRef.current.scrollHeight > scrollRef.current.clientHeight &&
+				scrollEl.scrollHeight > scrollEl.clientHeight &&
 				!state.animation?.ignoreEscapes
 			) {
 				setEscapedFromLock(true);
@@ -549,8 +561,9 @@ export const useStickToBottom = (
 
 	const handleTouchMove = useCallback(
 		(e: TouchEvent) => {
+			const scrollEl = scrollElementRef.current;
 			if (
-				!scrollRef.current ||
+				!scrollEl ||
 				touchStartY.current === null ||
 				e.touches.length !== 1
 			) {
@@ -563,7 +576,7 @@ export const useStickToBottom = (
 			// User is scrolling up (finger moving down)
 			if (
 				deltaY < -10 &&
-				scrollRef.current.scrollHeight > scrollRef.current.clientHeight &&
+				scrollEl.scrollHeight > scrollEl.clientHeight &&
 				!state.animation?.ignoreEscapes
 			) {
 				setEscapedFromLock(true);
@@ -580,27 +593,83 @@ export const useStickToBottom = (
 		touchStartY.current = null;
 	}, []);
 
-	const scrollRef = useRefCallback((scroll) => {
-		scrollRef.current?.removeEventListener("scroll", handleScroll);
-		scrollRef.current?.removeEventListener("wheel", handleWheel);
-		scrollRef.current?.removeEventListener("touchstart", handleTouchStart);
-		scrollRef.current?.removeEventListener("touchmove", handleTouchMove);
-		scrollRef.current?.removeEventListener("touchend", handleTouchEnd);
+	// Store handlers in refs to avoid circular dependencies
+	const handlersRef = useRef({
+		handleScroll,
+		handleWheel,
+		handleTouchStart,
+		handleTouchMove,
+		handleTouchEnd,
+		scrollToBottom,
+	});
+	handlersRef.current = {
+		handleScroll,
+		handleWheel,
+		handleTouchStart,
+		handleTouchMove,
+		handleTouchEnd,
+		scrollToBottom,
+	};
 
-		scroll?.addEventListener("scroll", handleScroll, { passive: true });
-		scroll?.addEventListener("wheel", handleWheel, { passive: true });
+	const scrollRef = useRefCallback((scroll) => {
+		const prevScroll = scrollElementRef.current;
+		const handlers = handlersRef.current;
+
+		prevScroll?.removeEventListener("scroll", handlers.handleScroll);
+		prevScroll?.removeEventListener("wheel", handlers.handleWheel);
+		prevScroll?.removeEventListener("touchstart", handlers.handleTouchStart);
+		prevScroll?.removeEventListener("touchmove", handlers.handleTouchMove);
+		prevScroll?.removeEventListener("touchend", handlers.handleTouchEnd);
+		prevScroll?.removeEventListener("touchcancel", handlers.handleTouchEnd);
+
+		scrollElementRef.current = scroll;
+
+		scroll?.addEventListener("scroll", handlers.handleScroll, { passive: true });
+		scroll?.addEventListener("wheel", handlers.handleWheel, { passive: true });
 
 		// Touch event handling for momentum scroll detection
-		scroll?.addEventListener("touchstart", handleTouchStart, { passive: true });
-		scroll?.addEventListener("touchmove", handleTouchMove, { passive: true });
-		scroll?.addEventListener("touchend", handleTouchEnd, { passive: true });
-	}, []);
+		scroll?.addEventListener("touchstart", handlers.handleTouchStart, { passive: true });
+		scroll?.addEventListener("touchmove", handlers.handleTouchMove, { passive: true });
+		scroll?.addEventListener("touchend", handlers.handleTouchEnd, { passive: true });
+		scroll?.addEventListener("touchcancel", handlers.handleTouchEnd, { passive: true });
+
+		// Reset scroll-related state when container changes
+		if (prevScroll && scroll && prevScroll !== scroll) {
+			state.lastScrollTop = undefined;
+			state.ignoreScrollToTop = undefined;
+			state.animation = undefined;
+			state.lastTick = undefined;
+			state.velocity = 0;
+			state.accumulated = 0;
+			touchStartY.current = null;
+
+			// If we were at bottom, re-trigger scroll to bottom for new container
+			if (state.isAtBottom) {
+				requestAnimationFrame(() => {
+					handlersRef.current.scrollToBottom({
+						animation: mergeAnimations(
+							optionsRef.current,
+							optionsRef.current.initial,
+						),
+					});
+				});
+			}
+		}
+	}, [state]);
 
 	const contentRef = useRefCallback((content) => {
+		const prevContent = contentElementRef.current;
 		state.resizeObserver?.disconnect();
+
+		contentElementRef.current = content;
 
 		if (!content) {
 			return;
+		}
+
+		// Reset resize state when content container changes
+		if (prevContent && prevContent !== content) {
+			state.resizeDifference = 0;
 		}
 
 		let previousHeight: number | undefined;
@@ -671,7 +740,19 @@ export const useStickToBottom = (
 		});
 
 		state.resizeObserver?.observe(content);
-	}, []);
+
+		// If container changed and we're supposed to be at bottom, scroll there
+		if (prevContent && prevContent !== content && state.isAtBottom) {
+			requestAnimationFrame(() => {
+				handlersRef.current.scrollToBottom({
+					animation: mergeAnimations(
+						optionsRef.current,
+						optionsRef.current.initial,
+					),
+				});
+			});
+		}
+	}, [state]);
 
 	return {
 		contentRef,
